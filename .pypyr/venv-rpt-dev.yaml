@@ -1,0 +1,11 @@
+# Create a python virtual environment for ansible development and deployment.
+# pypyr venv-rpt-dev path_to_new_venv
+context_parser: pypyr.parser.string
+steps:
+  - name: pypyr.steps.venv
+    in:
+      venv:
+        path: "{argString}"
+        pip: beartype~=0.22.0 confluent_kafka~=2.14.0 behave~=1.3.0 pylint~=4.0.0 loguru~=0.7.0
+        clear: true
+        prompt: rpt-dev
