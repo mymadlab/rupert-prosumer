@@ -1,0 +1,6 @@
+# pylint: disable=missing-module-docstring,missing-function-docstring,not-callable
+"""
+Configuration test cases
+"""
+from behave import given, then, when
+
