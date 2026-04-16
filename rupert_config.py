@@ -38,12 +38,18 @@ class RupertConfig():
 				cfg_json = cfg.read()
 			config = json.loads(cfg_json)
 			return config
-		except FileNotFoundError as fnf_exc:
-			raise fnf_exc
-		except json.JSONDecodeError as jde_exc:
-			raise jde_exc
-		except OSError as os_exc:
-			raise os_exc
+		except FileNotFoundError as e:
+			raise e
+		except json.JSONDecodeError as e:
+			raise e
+		except PermissionError as e:
+			raise e
+		except IsADirectoryError as e:
+			raise e
+		except OSError as e:
+			raise e
+		except UnicodeDecodeError as e:
+			raise e
 
 	@beartype
 	def reload(self) -> None:
