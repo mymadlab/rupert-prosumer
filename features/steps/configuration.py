@@ -18,7 +18,7 @@ def step_given_valid_configuration_file_exists(context):
 	                                 suffix='.json',
 	                                 delete=False,
 	                                 encoding='utf-8') as temp_file:
-		temp_file.write("{'service': 'rupert', 'timeout': 30}")
+		temp_file.write('{"service": "rupert", "timeout": 30}')
 		context.config_file_path = temp_file.name
 
 @when("we are able to read the file")

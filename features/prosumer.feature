@@ -1,4 +1,4 @@
-Feature: Kafka Producer and Consumer
+Feature: Kafka Admin Client, Producer, and Consumer Functionality
 
 	Scenario: Kafka admin client to create topics
 		Given a Kafka admin client is set up
