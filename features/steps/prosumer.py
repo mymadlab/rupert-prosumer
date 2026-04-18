@@ -283,7 +283,8 @@ def a_Kafka_producer_and_consumer_are_set_up(context):
 
 @when("the producer sends a message to a topic")
 def the_producer_sends_a_message_to_a_topic(context):
-	context.sent_message = 'rupert-behave-message'
+	context.sent_event = {'message': 'rupert-behave-message'}
+	context.sent_message = context.client.serialize_to_json(context.sent_event)
 	context.client.send('topic_one', context.sent_message.encode('utf-8'))
 	context.listen_exit_code = None
 	try:
@@ -295,5 +296,6 @@ def the_producer_sends_a_message_to_a_topic(context):
 @then("the consumer should receive the message from the topic")
 def the_consumer_should_receive_the_message_from_the_topic(context):
 	assert context.client.received_message == context.sent_message
+	assert json.loads(context.client.received_message) == context.sent_event
 	assert context.listen_exit_code in (None, 0)
 	_cleanup(context)

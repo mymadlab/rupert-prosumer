@@ -90,10 +90,20 @@ class RupertProsumer():
 				consuer_message
 		"""
 		try:
-			print(consumer_message.value().decode('utf-8'))
-		except AttributeError as e:
+			message_bytes = consumer_message.value()
+			decoded_message = message_bytes.decode('utf-8')
+			self.logger.success("Successfully received an event.")
+			self.logger.trace("RECEIVED MESSAGE: " + decoded_message)
+		except UnicodeDecodeError as e:
 			print(f"Message decoding error: {e}")
 			self.logger.error(f"Message decoding error: {e}")
+			try:
+				self.logger.trace(f"Message bytes: {message_bytes!r}")
+			except (AttributeError, TypeError, ValueError, RuntimeError):
+				pass
+		except (AttributeError, TypeError) as e:
+			print(f"Error processing message: {e}")
+			self.logger.error(f"Error processing message: {e}")
 		time.sleep(10)
 		self.stop()
 
@@ -122,6 +132,7 @@ class RupertProsumer():
 		try:
 			producer = Producer(self.config['kafka']['connection'])
 			producer.produce(self.config['kafka']['topics'][topic], event_bytes)
+			self.logger.success("Successfully sent an event.")
 			producer.poll(10000)
 			producer.flush()
 		except BufferError as e:
@@ -135,9 +146,29 @@ class RupertProsumer():
 			self.logger.error(f"Kafka producer error: {e}")
 
 	@beartype
+	def serialize_to_json(self, event: dict) -> str:
+		"""
+			Description: Serializes a dictionary to JSON and sends it as bytes to Kafka
+			Responsible for:
+				1. Serializes a dictionary to JSON
+				2. Converts the JSON string to bytes
+				3. Send the byte array to Kafka as a producer
+		"""
+		try:
+			event_json = json.dumps(event)
+		except (TypeError, ValueError) as e:
+			print(f"JSON serialization error: {e}")
+			self.logger.error(f"JSON serialization error: {e}")
+			self.logger.debug(f"Event that failed to serialize: {event!r}")
+
+		return event_json
+
+	@beartype
 	def stop(self) -> None:
-		"""Closes the the consumer and exits"""
+		"""Closes the the consumer and exit"""
 		self.close_consumer = True
+		self.logger.warning("Shutting down Rupert Prosumer...")
+
 
 	## Private methods, best not to overide anything beyond this point
 
