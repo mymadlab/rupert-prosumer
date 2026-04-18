@@ -20,7 +20,7 @@ Feature: Kafka Admin Client, Producer, and Consumer Functionality
 		When topic listing fails
 		Then the Kafka admin client should exit with an error code
 
-#	Scenario: Kafka producer and consumer can send and receive messages
-#		Given a Kafka producer and consumer are set up
-#		When the producer sends a message to a topic
-#		Then the consumer should receive the message from the topic
+	Scenario: Kafka producer and consumer can send and receive messages
+		Given a Kafka producer and consumer are set up
+		When the producer sends a message to a topic
+		Then the consumer should receive the message from the topic

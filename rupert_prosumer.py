@@ -10,6 +10,149 @@ from beartype import beartype
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 from rupert_config import RupertConfig
+from rupert_logger import RupertLogger
+
+class RupertProsumer():
+	"""
+		Description: Parent class used by rupert prosumers.
+		Responsible for:
+			1. Basic constructor for starting prosumers.
+			2. Initiates Kafka consumer
+			3. Contains method to push to Kafka as producer
+	"""
+	@beartype
+	def __init__(self, config_file: str) -> None:
+		"""
+			Construct for rupert prosumer classes.
+			Responsible for:
+				1. Loading config.
+				2. Initate topic consumer
+			Requires:
+				config_file - Path to the rupert prosumer setting file
+		"""
+		self.config_file = config_file
+		self.config = {}
+		self.__load_config()
+		self.logger = RupertLogger(self.config['logging'])
+		self.consumer = None
+		self.close_consumer = False
+
+	@beartype
+	def listen(self, topic: str) -> None:
+		"""
+			Description: Connects to Kafka and consumes a topic
+			Responsible for:
+				1. Connecting to Kafka and listening for events/messages
+				2. Calls the process_event method
+			Requires:
+				Nothing
+			Raises:
+				RuntimeError if called on a closed consumer
+		"""
+		try:
+			self.consumer = Consumer(self.consumer_cfg)
+			self.consumer.subscribe([self.config['kafka']['topics'][topic]])
+		except (AttributeError, KeyError, TypeError, ValueError) as e:
+			print(f"Kafka consumer error: {e}")
+			self.logger.error(f"Kafka consumer error: {e}")
+			sys.exit(1)
+		while True:
+			if self.close_consumer:
+				self.consumer.close()
+				sys.exit()
+			try:
+				msg = self.consumer.poll(1.0)
+			except (KafkaException, RuntimeError,TypeError) as e:
+				print(f"Kafka connection error: {e}")
+				self.logger.error(f"Kafka connection error: {e}")
+				continue
+			if msg is None:
+				pass
+			elif msg.error():
+				print(msg.error())
+			else:
+				try:
+					self.process_event(msg)
+				except (UnicodeDecodeError, TypeError) as e:
+					print(f"Error processing event: {e}")
+					self.logger.error(f"Error processing event: {e}")
+
+	@beartype
+	def process_event(self, consumer_message) -> None:
+		"""
+			Description: Each rupert prosumer should overide this method. The code here mostly
+				is to support testing connectivity with Kafka
+			Responsible for:
+				1. Converts the messages value to string
+				2. Returns the string
+				3. Quits the class
+			Requires:
+				consuer_message
+		"""
+		try:
+			print(consumer_message.value().decode('utf-8'))
+		except AttributeError as e:
+			print(f"Message decoding error: {e}")
+			self.logger.error(f"Message decoding error: {e}")
+		time.sleep(10)
+		self.stop()
+
+	@beartype
+	def reload(self):
+		"""
+			Reloads the rupert prosumer
+				1. Reloads the configuration
+		"""
+		self.__load_config()
+
+	@beartype
+	def send(self, topic: str, event_bytes: bytes) -> None:
+		"""
+			Description: Sends a byte array to Kafka as a producer
+			Responsible for:
+				1. Send event bytes to topic
+			Requires:
+				1. topic - Name of the topic to send message/event to (string)
+				2. event_bytes - array of bytes
+			Raises:
+				BufferError - if the internal producer message queue is full 
+				KafkaException - for other errors, see exception code
+				NotImplementedError - if timestamp is specified without underlying library support.
+		"""
+		try:
+			producer = Producer(self.config['kafka']['connection'])
+			producer.produce(self.config['kafka']['topics'][topic], event_bytes)
+			producer.poll(10000)
+			producer.flush()
+		except BufferError as e:
+			print(f"Producer buffer error: {e}")
+			self.logger.error(f"Producer buffer error: {e}")
+		except (KeyError, TypeError, ValueError) as e:
+			print(f"JSON error: {e}")
+			self.logger.error(f"JSON error: {e}")
+		except (KafkaException, RuntimeError) as e:
+			print(f"Kafka producer error: {e}")
+			self.logger.error(f"Kafka producer error: {e}")
+
+	@beartype
+	def stop(self) -> None:
+		"""Closes the the consumer and exits"""
+		self.close_consumer = True
+
+	## Private methods, best not to overide anything beyond this point
+
+	@beartype
+	def __load_config(self) -> None:
+		"""
+			Description: Parent class used by other rupert prosumers.
+			Responsible for:
+				1. Loading config
+			Requires:
+				config_file - Path to the rupert prosumer setting file
+		"""
+		with open(self.config_file, 'r', encoding='utf-8') as config:
+			config_json = config.read()
+		self.config = json.loads(config_json)
 
 class RupertProsumerAdminClient():
 	"""
@@ -24,32 +167,13 @@ class RupertProsumerAdminClient():
 		"""
 			Description: Constructor for initializing Kafka
 			Responsible for:
-				1. Confirm the kafka settings file exists
-				2. Load settings
+				1. Confirm the kafka config file exists
+				2. Load config
 				3. Init other variables
 		"""
 
 		self.config_file = config_file
-		try:
-			self.config = RupertConfig(self.config_file).config
-		except FileNotFoundError as e:
-			print(f"Settings file not found: {e}")
-			sys.exit(1)
-		except json.JSONDecodeError as e:
-			print(f"JSON decode error in settings file: {e}")
-			sys.exit(1)
-		except PermissionError as e:
-			print(f"Permission error loading settings file: {e}")
-			sys.exit(1)
-		except IsADirectoryError as e:
-			print(f"Expected a file but found a directory: {e}")
-			sys.exit(1)
-		except OSError as e:
-			print(f"OS error loading settings file: {e}")
-			sys.exit(1)
-		except UnicodeDecodeError as e:
-			print(f"Encoding error loading settings file: {e}")
-			sys.exit(1)
+		self.config = RupertConfig(self.config_file).config
 
 		try:
 			self.consumer_cfg = self.config['kafka']['connection'] | self.config['kafka']['consumer']
@@ -70,7 +194,7 @@ class RupertProsumerAdminClient():
 	@beartype
 	def get_topics(self) -> dict:
 		"""
-			Description: Resets Kafaka for synapses
+			Description: Gets a list of Kafaka topics
 			Responsible for:
 				1. retrieving a list of topics
 		"""
@@ -93,7 +217,7 @@ class RupertProsumerAdminClient():
 	@beartype
 	def initialize(self) -> None:
 		"""
-			Description: Initializes Kafaka for synapses
+			Description: Initializes Kafaka topics
 			Responsible for:
 				1. Creates topics
 		"""
@@ -121,7 +245,7 @@ class RupertProsumerAdminClient():
 	@beartype
 	def reset(self) -> None:
 		"""
-			Description: Resets Kafaka for synapses
+			Description: Resets Kafaka topics
 			Responsible for:
 				1. Deletes topics
 		"""

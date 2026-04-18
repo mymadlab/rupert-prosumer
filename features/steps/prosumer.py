@@ -1,4 +1,4 @@
-# pylint: disable=missing-module-docstring,missing-function-docstring,not-callable
+# pylint: disable=missing-module-docstring,missing-function-docstring,not-callable,invalid-name,too-few-public-methods
 """
 Kafka Admin Client, Producer, and Consumer Test Cases
 """
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from behave import given, then, when
 import rupert_prosumer
-from rupert_prosumer import RupertProsumerAdminClient
+from rupert_prosumer import RupertProsumer, RupertProsumerAdminClient
 
 
 class _FakeFuture:
@@ -26,6 +26,7 @@ class _FakeAdminClient:
 		self.deleted_topics = []
 
 	def create_topics(self, new_topics, validate_only=False):
+		_ = validate_only
 		self.created_topics = [topic.topic for topic in new_topics]
 		return {topic.topic: _FakeFuture(None) for topic in new_topics}
 
@@ -57,6 +58,69 @@ class _FailingConsumer:
 		raise RuntimeError('consumer init failed')
 
 
+class _FakeKafkaMessage:
+	def __init__(self, payload: bytes):
+		self._payload = payload
+
+	def value(self):
+		return self._payload
+
+	def error(self):
+		return None
+
+
+class _InMemoryBroker:
+	topics = {}
+
+	@classmethod
+	def reset(cls):
+		cls.topics = {}
+
+
+class _FakeStreamingConsumer:
+	def __init__(self, cfg):
+		self.cfg = cfg
+		self.subscriptions = []
+
+	def subscribe(self, topics):
+		self.subscriptions = list(topics)
+
+	def poll(self, timeout):
+		_ = timeout
+		for topic in self.subscriptions:
+			messages = _InMemoryBroker.topics.get(topic, [])
+			if messages:
+				return _FakeKafkaMessage(messages.pop(0))
+		return None
+
+	def close(self):
+		pass
+
+
+class _FakeProducer:
+	def __init__(self, cfg):
+		self.cfg = cfg
+
+	def produce(self, topic, event_bytes):
+		_InMemoryBroker.topics.setdefault(topic, []).append(event_bytes)
+
+	def poll(self, timeout):
+		_ = timeout
+
+	def flush(self):
+		pass
+
+
+class _TestRupertProsumer(RupertProsumer):
+	def __init__(self, config_file: str) -> None:
+		super().__init__(config_file)
+		self.received_message = None
+
+	def process_event(self, consumer_message) -> None:
+		self.received_message = consumer_message.value().decode('utf-8')
+		self.stop()
+
+
 def _write_temp_settings_file() -> str:
 	settings = {
 		'kafka': {
@@ -74,18 +138,64 @@ def _write_temp_settings_file() -> str:
 		}
 	}
 
-	with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as temp_file:
+	with tempfile.NamedTemporaryFile(mode='w',
+																	suffix='.json',
+																	delete=False,
+																	encoding='utf-8') as temp_file:
 		json.dump(settings, temp_file)
 		return temp_file.name
+
+
+def _write_temp_prosumer_settings_file() -> tuple[str, str]:
+	with tempfile.NamedTemporaryFile(mode='w',
+																	suffix='.log',
+																	delete=False,
+																	encoding='utf-8') as log_file:
+		log_file_path = log_file.name
+
+	settings = {
+		'kafka': {
+			'connection': {
+				'bootstrap.servers': '192.168.1.240:9092'
+			},
+			'consumer': {
+				'group.id': 'rupert-behave-tests',
+				'auto.offset.reset': 'earliest'
+			},
+			'topics': {
+				'topic_one': 'rupert.behave.topic.one',
+				'topic_two': 'rupert.behave.topic.two'
+			}
+		},
+		'logging': {
+			'log_file': log_file_path,
+			'rotation': None,
+			'retention': None,
+			'level': 'INFO'
+		}
+	}
+
+	with tempfile.NamedTemporaryFile(mode='w',
+																	suffix='.json',
+																	delete=False,
+																	encoding='utf-8') as temp_file:
+		json.dump(settings, temp_file)
+		return temp_file.name, log_file_path
 
 
 def _cleanup(context):
 	if hasattr(context, 'settings_file_path'):
 		Path(context.settings_file_path).unlink(missing_ok=True)
+	if hasattr(context, 'prosumer_settings_file_path'):
+		Path(context.prosumer_settings_file_path).unlink(missing_ok=True)
+	if hasattr(context, 'prosumer_log_file_path'):
+		Path(context.prosumer_log_file_path).unlink(missing_ok=True)
 	if hasattr(context, 'original_consumer'):
 		rupert_prosumer.Consumer = context.original_consumer
+	if hasattr(context, 'original_producer'):
+		rupert_prosumer.Producer = context.original_producer
 
-"""Admin Client Test Cases"""
+# Admin Client Test Cases
 
 @given("a Kafka admin client is set up")
 def a_Kafka_admin_client_is_set_up(context):
@@ -151,16 +261,39 @@ def the_Kafka_admin_client_should_exit_with_an_error_code(context):
 	assert context.exit_code == 1, 'Expected get_topics() failure to exit with code 1.'
 	_cleanup(context)
 
-"""
+
 @given("a Kafka producer and consumer are set up")
 def a_Kafka_producer_and_consumer_are_set_up(context):
-	raise StepNotImplementedError('Given a Kafka producer and consumer are set up')
+	(
+		context.prosumer_settings_file_path,
+		context.prosumer_log_file_path,
+	) = _write_temp_prosumer_settings_file()
+	context.client = _TestRupertProsumer(context.prosumer_settings_file_path)
+	context.client.consumer_cfg = (
+		context.client.config['kafka']['connection']
+		| context.client.config['kafka']['consumer']
+	)
+
+	context.original_consumer = rupert_prosumer.Consumer
+	context.original_producer = rupert_prosumer.Producer
+	rupert_prosumer.Consumer = _FakeStreamingConsumer
+	rupert_prosumer.Producer = _FakeProducer
+	_InMemoryBroker.reset()
+
 
 @when("the producer sends a message to a topic")
 def the_producer_sends_a_message_to_a_topic(context):
-	raise StepNotImplementedError('When the producer sends a message to a topic')
+	context.sent_message = 'rupert-behave-message'
+	context.client.send('topic_one', context.sent_message.encode('utf-8'))
+	context.listen_exit_code = None
+	try:
+		context.client.listen('topic_one')
+	except SystemExit as exc:
+		context.listen_exit_code = exc.code
+
 
 @then("the consumer should receive the message from the topic")
 def the_consumer_should_receive_the_message_from_the_topic(context):
-	raise StepNotImplementedError('Then the consumer should receive the message from the topic')
-"""
+	assert context.client.received_message == context.sent_message
+	assert context.listen_exit_code in (None, 0)
+	_cleanup(context)
