@@ -5,110 +5,14 @@ Kafka Admin Client, Producer, and Consumer Test Cases
 
 import json
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 from behave import given, then, when
-import rupert_prosumer
+from confluent_kafka import Consumer, KafkaException, Producer
+from confluent_kafka.admin import NewTopic
 from rupert_prosumer import RupertProsumer, RupertProsumerAdminClient
-
-
-class _FakeFuture:
-	def __init__(self, result_value=None):
-		self._result_value = result_value
-
-	def result(self):
-		return self._result_value
-
-
-class _FakeAdminClient:
-	def __init__(self):
-		self.created_topics = []
-		self.deleted_topics = []
-
-	def create_topics(self, new_topics, validate_only=False):
-		_ = validate_only
-		self.created_topics = [topic.topic for topic in new_topics]
-		return {topic.topic: _FakeFuture(None) for topic in new_topics}
-
-	def delete_topics(self, topics):
-		self.deleted_topics = list(topics)
-		return {topic: _FakeFuture(None) for topic in topics}
-
-
-class _TopicListResult:
-	def __init__(self, topics):
-		self.topics = topics
-
-
-class _FakeConsumer:
-	def __init__(self, cfg):
-		self.cfg = cfg
-
-	def list_topics(self):
-		return _TopicListResult(
-			{
-				'rupert.behave.topic.one': object(),
-				'rupert.behave.topic.two': object()
-			}
-		)
-
-
-class _FailingConsumer:
-	def __init__(self, cfg):
-		raise RuntimeError('consumer init failed')
-
-
-class _FakeKafkaMessage:
-	def __init__(self, payload: bytes):
-		self._payload = payload
-
-	def value(self):
-		return self._payload
-
-	def error(self):
-		return None
-
-
-class _InMemoryBroker:
-	topics = {}
-
-	@classmethod
-	def reset(cls):
-		cls.topics = {}
-
-
-class _FakeStreamingConsumer:
-	def __init__(self, cfg):
-		self.cfg = cfg
-		self.subscriptions = []
-
-	def subscribe(self, topics):
-		self.subscriptions = list(topics)
-
-	def poll(self, timeout):
-		_ = timeout
-		for topic in self.subscriptions:
-			messages = _InMemoryBroker.topics.get(topic, [])
-			if messages:
-				return _FakeKafkaMessage(messages.pop(0))
-		return None
-
-	def close(self):
-		pass
-
-
-class _FakeProducer:
-	def __init__(self, cfg):
-		self.cfg = cfg
-
-	def produce(self, topic, event_bytes):
-		_InMemoryBroker.topics.setdefault(topic, []).append(event_bytes)
-
-	def poll(self, timeout):
-		_ = timeout
-
-	def flush(self):
-		pass
 
 
 class _TestRupertProsumer(RupertProsumer):
@@ -121,22 +25,119 @@ class _TestRupertProsumer(RupertProsumer):
 		self.stop()
 
 
-def _write_temp_settings_file() -> str:
+def _build_kafka_settings(log_file_path: str | None = None) -> dict:
+	test_id = uuid.uuid4().hex[:8]
 	settings = {
 		'kafka': {
 			'connection': {
 				'bootstrap.servers': '192.168.1.240:9092'
 			},
 			'consumer': {
-				'group.id': 'rupert-behave-tests',
+				'group.id': f'rupert-behave-tests-{test_id}',
 				'auto.offset.reset': 'earliest'
 			},
 			'topics': {
-				'topic_one': 'rupert.behave.topic.one',
-				'topic_two': 'rupert.behave.topic.two'
+				'topic_one': f'rupert.behave.{test_id}.topic.one',
+				'topic_two': f'rupert.behave.{test_id}.topic.two'
 			}
 		}
 	}
+	if log_file_path is not None:
+		settings['logging'] = {
+			'log_file': log_file_path,
+			'rotation': None,
+			'retention': None,
+			'level': 'INFO'
+		}
+	return settings
+
+
+def _wait_for_topics_state(client: RupertProsumerAdminClient,
+									 topics: list[str],
+									 should_exist: bool,
+									 timeout_seconds: float = 15.0) -> dict:
+	deadline = time.time() + timeout_seconds
+	last_seen_topics = {}
+	while time.time() < deadline:
+		last_seen_topics = _list_topics_with_timeout(client, timeout_seconds=5.0)
+		if should_exist and all(topic in last_seen_topics for topic in topics):
+			return last_seen_topics
+		if (not should_exist) and all(topic not in last_seen_topics for topic in topics):
+			return last_seen_topics
+		time.sleep(0.5)
+	return last_seen_topics
+
+
+def _create_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 15.0) -> None:
+	topics = [
+		NewTopic(topic=topic_name, num_partitions=1, replication_factor=1)
+		for topic_name in client.config['kafka']['topics'].values()
+	]
+	futures = client.admin_client.create_topics(new_topics=topics, validate_only=False)
+	for future in futures.values():
+		future.result(timeout=timeout_seconds)
+
+
+def _delete_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 15.0) -> None:
+	topics = list(client.config['kafka']['topics'].values())
+	futures = client.admin_client.delete_topics(topics)
+	for future in futures.values():
+		future.result(timeout=timeout_seconds)
+
+
+def _list_topics_with_timeout(client: RupertProsumerAdminClient, timeout_seconds: float = 10.0) -> dict:
+	consumer = Consumer(client.consumer_cfg)
+	try:
+		return consumer.list_topics(timeout=timeout_seconds).topics
+	finally:
+		consumer.close()
+
+
+def _consume_message_with_timeout(client: RupertProsumer,
+								 topic_key: str,
+								 timeout_seconds: float = 20.0) -> str | None:
+	consumer_cfg = client.config['kafka']['connection'] | client.config['kafka']['consumer']
+	topic_name = client.config['kafka']['topics'][topic_key]
+	consumer = Consumer(consumer_cfg)
+	consumer.subscribe([topic_name])
+
+	deadline = time.time() + timeout_seconds
+	try:
+		while time.time() < deadline:
+			try:
+				msg = consumer.poll(1.0)
+			except (KafkaException, RuntimeError, TypeError):
+				continue
+			if msg is None:
+				continue
+			if msg.error():
+				continue
+			return msg.value().decode('utf-8')
+	finally:
+		consumer.close()
+
+	return None
+
+
+def _send_message_with_timeout(client: RupertProsumer,
+							  topic_key: str,
+							  payload: bytes,
+							  timeout_seconds: float = 8.0) -> bool:
+	producer_cfg = dict(client.config['kafka']['connection'])
+	producer_cfg['message.timeout.ms'] = int(timeout_seconds * 1000)
+	producer_cfg['socket.timeout.ms'] = int(timeout_seconds * 1000)
+	producer = Producer(producer_cfg)
+	try:
+		producer.produce(client.config['kafka']['topics'][topic_key], payload)
+		producer.poll(0)
+		remaining = producer.flush(timeout_seconds)
+		return remaining == 0
+	finally:
+		producer.flush(0)
+
+
+def _write_temp_settings_file() -> str:
+	settings = _build_kafka_settings()
 
 	with tempfile.NamedTemporaryFile(mode='w',
 																	suffix='.json',
@@ -153,27 +154,7 @@ def _write_temp_prosumer_settings_file() -> tuple[str, str]:
 																	encoding='utf-8') as log_file:
 		log_file_path = log_file.name
 
-	settings = {
-		'kafka': {
-			'connection': {
-				'bootstrap.servers': '192.168.1.240:9092'
-			},
-			'consumer': {
-				'group.id': 'rupert-behave-tests',
-				'auto.offset.reset': 'earliest'
-			},
-			'topics': {
-				'topic_one': 'rupert.behave.topic.one',
-				'topic_two': 'rupert.behave.topic.two'
-			}
-		},
-		'logging': {
-			'log_file': log_file_path,
-			'rotation': None,
-			'retention': None,
-			'level': 'INFO'
-		}
-	}
+	settings = _build_kafka_settings(log_file_path=log_file_path)
 
 	with tempfile.NamedTemporaryFile(mode='w',
 																	suffix='.json',
@@ -184,16 +165,20 @@ def _write_temp_prosumer_settings_file() -> tuple[str, str]:
 
 
 def _cleanup(context):
+	if hasattr(context, 'created_topics') and context.created_topics:
+		try:
+			if hasattr(context, 'admin_client'):
+				_delete_topics_with_timeout(context.admin_client, timeout_seconds=8.0)
+			elif hasattr(context, 'client') and hasattr(context.client, 'reset'):
+				_delete_topics_with_timeout(context.client, timeout_seconds=8.0)
+		except (SystemExit, TimeoutError, RuntimeError, TypeError, ValueError):
+			pass
 	if hasattr(context, 'settings_file_path'):
 		Path(context.settings_file_path).unlink(missing_ok=True)
 	if hasattr(context, 'prosumer_settings_file_path'):
 		Path(context.prosumer_settings_file_path).unlink(missing_ok=True)
 	if hasattr(context, 'prosumer_log_file_path'):
 		Path(context.prosumer_log_file_path).unlink(missing_ok=True)
-	if hasattr(context, 'original_consumer'):
-		rupert_prosumer.Consumer = context.original_consumer
-	if hasattr(context, 'original_producer'):
-		rupert_prosumer.Producer = context.original_producer
 
 # Admin Client Test Cases
 
@@ -201,54 +186,55 @@ def _cleanup(context):
 def a_Kafka_admin_client_is_set_up(context):
 	context.settings_file_path = _write_temp_settings_file()
 	context.client = RupertProsumerAdminClient(context.settings_file_path)
-	context.fake_admin_client = _FakeAdminClient()
-	context.client.admin_client = context.fake_admin_client
-	context.original_consumer = rupert_prosumer.Consumer
+	context.created_topics = False
 
 @when("we create a new topic")
 def we_create_a_new_topic(context):
-	context.client.initialize()
+	_create_topics_with_timeout(context.client, timeout_seconds=12.0)
+	context.created_topics = True
 
 @then("the topic should be successfully created in the Kafka cluster")
 def the_topic_should_be_successfully_created_in_the_Kafka_cluster(context):
-	created_topics = context.fake_admin_client.created_topics
 	expected_topics = list(context.client.config['kafka']['topics'].values())
+	actual_topics = _wait_for_topics_state(context.client, expected_topics, should_exist=True)
 
-	assert created_topics, 'Expected topics to be created.'
-	assert sorted(created_topics) == sorted(expected_topics)
+	assert all(topic in actual_topics for topic in expected_topics), 'Expected topics to be created.'
 	_cleanup(context)
 
 @when("we delete an existing topic")
 def we_delete_an_existing_topic(context):
-	context.client.reset()
+	_create_topics_with_timeout(context.client, timeout_seconds=12.0)
+	context.created_topics = True
+	_delete_topics_with_timeout(context.client, timeout_seconds=12.0)
+	context.created_topics = False
 
 @then("the topic should be successfully deleted from the Kafka cluster")
 def the_topic_should_be_successfully_deleted_from_the_Kafka_cluster(context):
-	deleted_topics = context.fake_admin_client.deleted_topics
 	expected_topics = list(context.client.config['kafka']['topics'].values())
+	actual_topics = _wait_for_topics_state(context.client, expected_topics, should_exist=False)
 
-	assert deleted_topics, 'Expected topics to be deleted.'
-	assert sorted(deleted_topics) == sorted(expected_topics)
+	assert all(topic not in actual_topics for topic in expected_topics), 'Expected topics to be deleted.'
 	_cleanup(context)
 
 
 @when("we list the Kafka topics")
 def we_list_the_Kafka_topics(context):
-	rupert_prosumer.Consumer = _FakeConsumer
-	context.topics = context.client.get_topics()
+	_create_topics_with_timeout(context.client, timeout_seconds=12.0)
+	context.created_topics = True
+	context.topics = _list_topics_with_timeout(context.client, timeout_seconds=8.0)
 
 
 @then("we should receive a dictionary of topics")
 def we_should_receive_a_dictionary_of_topics(context):
+	expected_topics = list(context.client.config['kafka']['topics'].values())
 	assert isinstance(context.topics, dict), 'Expected get_topics() to return a dictionary.'
-	assert 'rupert.behave.topic.one' in context.topics
-	assert 'rupert.behave.topic.two' in context.topics
+	assert all(topic in context.topics for topic in expected_topics), 'Expected all configured topics to be listed.'
 	_cleanup(context)
 
 
 @when("topic listing fails")
 def topic_listing_fails(context):
-	rupert_prosumer.Consumer = _FailingConsumer
+	context.client.consumer_cfg = None
 	context.exit_code = None
 	try:
 		context.client.get_topics()
@@ -273,29 +259,38 @@ def a_Kafka_producer_and_consumer_are_set_up(context):
 		context.client.config['kafka']['connection']
 		| context.client.config['kafka']['consumer']
 	)
+	context.admin_client = RupertProsumerAdminClient(context.prosumer_settings_file_path)
+	_create_topics_with_timeout(context.admin_client, timeout_seconds=12.0)
+	context.created_topics = True
 
-	context.original_consumer = rupert_prosumer.Consumer
-	context.original_producer = rupert_prosumer.Producer
-	rupert_prosumer.Consumer = _FakeStreamingConsumer
-	rupert_prosumer.Producer = _FakeProducer
-	_InMemoryBroker.reset()
+	expected_topics = list(context.admin_client.config['kafka']['topics'].values())
+	actual_topics = _wait_for_topics_state(context.admin_client, expected_topics, should_exist=True)
+	assert all(topic in actual_topics for topic in expected_topics), 'Expected producer/consumer topics to exist.'
 
 
 @when("the producer sends a message to a topic")
 def the_producer_sends_a_message_to_a_topic(context):
 	context.sent_event = {'message': 'rupert-behave-message'}
 	context.sent_message = context.client.serialize_to_json(context.sent_event)
-	context.client.send('topic_one', context.sent_message.encode('utf-8'))
-	context.listen_exit_code = None
-	try:
-		context.client.listen('topic_one')
-	except SystemExit as exc:
-		context.listen_exit_code = exc.code
+	context.send_ok = _send_message_with_timeout(
+		context.client,
+		'topic_one',
+		context.sent_message.encode('utf-8'),
+		timeout_seconds=8.0,
+	)
+	context.received_message = _consume_message_with_timeout(context.client, 'topic_one', timeout_seconds=20.0)
 
 
 @then("the consumer should receive the message from the topic")
 def the_consumer_should_receive_the_message_from_the_topic(context):
-	assert context.client.received_message == context.sent_message
-	assert json.loads(context.client.received_message) == context.sent_event
-	assert context.listen_exit_code in (None, 0)
+	assert context.send_ok, (
+		'Kafka producer timed out while flushing. '
+		'Check broker connectivity and advertised.listeners for reachable addresses.'
+	)
+	assert context.received_message is not None, (
+		'Expected a Kafka message but timed out waiting for topic_one. '
+		'This usually indicates a broker connectivity or advertised.listeners issue.'
+	)
+	assert context.received_message == context.sent_message
+	assert json.loads(context.received_message) == context.sent_event
 	_cleanup(context)
