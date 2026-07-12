@@ -2,6 +2,7 @@
 Description: Managers logging for rupert
 """
 import sys
+from pathlib import Path
 from loguru import logger
 from beartype import beartype
 
@@ -140,7 +141,9 @@ class RupertLogger():
 			Private method to configure the logger based on the provided configuration
 		"""
 		try:
-			logger.add(self.config['log_file'],
+			log_file_path = self.__resolve_log_file_path()
+			log_file_path.parent.mkdir(parents=True, exist_ok=True)
+			logger.add(str(log_file_path),
 							rotation=self.config['rotation'],
 							retention=self.config['retention'],
 							level=self.config['level'])
@@ -168,3 +171,16 @@ class RupertLogger():
 		except RuntimeError as e:
 			print(f"Runtime error creating log sink: {e}")
 			sys.exit(1)
+
+	@beartype
+	def __resolve_log_file_path(self) -> Path:
+		"""Resolve the configured log file path from file or directory settings."""
+		log_file = self.config.get('log_file')
+		if log_file:
+			return Path(log_file).expanduser()
+
+		log_directory = self.config.get('log_directory')
+		if log_directory:
+			return Path(log_directory).expanduser() / 'rupert.log'
+
+		raise KeyError('log_file or log_directory')
