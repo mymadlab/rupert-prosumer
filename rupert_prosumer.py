@@ -51,7 +51,7 @@ class RupertProsumer():
 		"""
 		self.logger = RupertLogger({ "log_file": f"{topic}.log" } | self.config['logging'])
 		try:
-			self.consumer = Consumer(self.consumer_cfg)
+			self.consumer = Consumer(self.config['kafka']['connection'] | self.config['kafka']['consumer'])
 			self.consumer.subscribe([self.config['kafka']['topics'][topic]])
 		except (AttributeError, KeyError, TypeError, ValueError) as e:
 			print(f"Kafka consumer error: {e}")
@@ -231,7 +231,7 @@ class RupertProsumerAdminClient():
 				1. retrieving a list of topics
 		"""
 		try:
-			consumer = Consumer(self.consumer_cfg)
+			consumer = Consumer(self.config['kafka']['connection'] | self.config['kafka']['consumer'])
 			return consumer.list_topics().topics
 		except KafkaException as e:
 			print(f"Kafka exception: {e}")
