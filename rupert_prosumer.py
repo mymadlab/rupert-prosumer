@@ -6,6 +6,7 @@ interface for communicating with kafka
 import sys
 import json
 import time
+from pathlib import Path
 from beartype import beartype
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
@@ -49,7 +50,13 @@ class RupertProsumer():
 			Raises:
 				RuntimeError if called on a closed consumer
 		"""
-		self.logger = RupertLogger(self.config['logging'])
+		logging_cfg = dict(self.config['logging'])
+		log_directory = logging_cfg.get('log_directory')
+		if log_directory:
+			logging_cfg['log_file'] = str(Path(log_directory).expanduser() / f"{topic}.log")
+		else:
+			logging_cfg['log_file'] = f"{topic}.log"
+		self.logger = RupertLogger(logging_cfg)
 		try:
 			topic_name = self.config['kafka']['topics'].get(topic, topic)
 			self.consumer = Consumer(self.config['kafka']['connection'] | self.config['kafka']['consumer'])
