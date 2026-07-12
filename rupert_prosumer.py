@@ -49,10 +49,11 @@ class RupertProsumer():
 			Raises:
 				RuntimeError if called on a closed consumer
 		"""
-		self.logger = RupertLogger({ "log_file": f"{topic}.log" } | self.config['logging'])
+		self.logger = RupertLogger(self.config['logging'])
 		try:
+			topic_name = self.config['kafka']['topics'].get(topic, topic)
 			self.consumer = Consumer(self.config['kafka']['connection'] | self.config['kafka']['consumer'])
-			self.consumer.subscribe([self.config['kafka']['topics'][topic]])
+			self.consumer.subscribe([topic_name])
 		except (AttributeError, KeyError, TypeError, ValueError) as e:
 			print(f"Kafka consumer error: {e}")
 			self.logger.error(f"Kafka consumer error: {e}")
