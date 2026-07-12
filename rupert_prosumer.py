@@ -9,8 +9,8 @@ import time
 from beartype import beartype
 from confluent_kafka import Producer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
-from rupert_config import RupertConfig
-from rupert_logger import RupertLogger
+from .rupert_config import RupertConfig
+from .rupert_logger import RupertLogger
 
 class RupertProsumer():
 	"""
@@ -33,7 +33,7 @@ class RupertProsumer():
 		self.config_file = config_file
 		self.config = {}
 		self.__load_config()
-		self.logger = RupertLogger(self.config['logging'])
+		self.logger = None
 		self.consumer = None
 		self.close_consumer = False
 
@@ -49,6 +49,7 @@ class RupertProsumer():
 			Raises:
 				RuntimeError if called on a closed consumer
 		"""
+		self.logger = RupertLogger({ "log_file": f"{topic}.log" } | self.config['logging'])
 		try:
 			self.consumer = Consumer(self.consumer_cfg)
 			self.consumer.subscribe([self.config['kafka']['topics'][topic]])
