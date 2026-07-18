@@ -6,9 +6,10 @@ interface for communicating with kafka
 import sys
 import json
 import time
+import asyncio
 from pathlib import Path
 from beartype import beartype
-from confluent_kafka import Producer, Consumer, KafkaException
+from confluent_kafka import AIOProducer, Consumer, KafkaException
 from confluent_kafka.admin import AdminClient, NewTopic
 from .rupert_config import RupertConfig
 from .rupert_logger import RupertLogger
@@ -125,7 +126,7 @@ class RupertProsumer():
 		self.__load_config()
 
 	@beartype
-	def send(self, topic: str, event_bytes: bytes) -> None:
+	async def send(self, topic: str, event_bytes: bytes) -> None:
 		"""
 			Description: Sends a byte array to Kafka as a producer
 			Responsible for:
@@ -151,10 +152,11 @@ class RupertProsumer():
 				# Continue without logging if logger configuration is unavailable.
 				self.logger = None
 		try:
-			producer = Producer(self.config['kafka']['connection'])
-			producer.produce(self.config['kafka']['topics'][topic], event_bytes)
-			producer.poll(10000)
-			producer.flush()
+			producer = AIOProducer(self.config['kafka']['connection'])
+			delivery_future = await producer.produce(self.config['kafka']['topics'][topic], event_bytes)
+			delivered_msg = await delivery_future
+			await producer.poll(10000)
+			await producer.flush()
 			if self.logger is not None:
 				self.logger.success("Successfully sent an event.")
 		except BufferError as e:
@@ -169,6 +171,8 @@ class RupertProsumer():
 			print(f"Kafka producer error: {e}")
 			if self.logger is not None:
 				self.logger.error(f"Kafka producer error: {e}")
+		finally:
+			await producer.close()
 
 	@beartype
 	def serialize_to_json(self, event: dict) -> str:
