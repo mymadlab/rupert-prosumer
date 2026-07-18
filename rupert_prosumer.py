@@ -157,8 +157,6 @@ class RupertProsumer():
 			producer.flush()
 			if self.logger is not None:
 				self.logger.success("Successfully sent an event.")
-			producer.poll(10000)
-			producer.flush()
 		except BufferError as e:
 			print(f"Producer buffer error: {e}")
 			if self.logger is not None:
