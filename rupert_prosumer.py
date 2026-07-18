@@ -138,21 +138,37 @@ class RupertProsumer():
 				KafkaException - for other errors, see exception code
 				NotImplementedError - if timestamp is specified without underlying library support.
 		"""
+		if self.logger is None:
+			try:
+				logging_cfg = dict(self.config['logging'])
+				log_directory = logging_cfg.get('log_directory')
+				if log_directory:
+					logging_cfg['log_file'] = str(Path(log_directory).expanduser() / 'producer.log')
+				else:
+					logging_cfg['log_file'] = 'producer.log'
+				self.logger = RupertLogger(logging_cfg)
+			except (KeyError, TypeError, ValueError):
+				# Continue without logging if logger configuration is unavailable.
+				self.logger = None
 		try:
 			producer = Producer(self.config['kafka']['connection'])
 			producer.produce(self.config['kafka']['topics'][topic], event_bytes)
-			self.logger.success("Successfully sent an event.")
+			if self.logger is not None:
+				self.logger.success("Successfully sent an event.")
 			producer.poll(10000)
 			producer.flush()
 		except BufferError as e:
 			print(f"Producer buffer error: {e}")
-			self.logger.error(f"Producer buffer error: {e}")
+			if self.logger is not None:
+				self.logger.error(f"Producer buffer error: {e}")
 		except (KeyError, TypeError, ValueError) as e:
 			print(f"JSON error: {e}")
-			self.logger.error(f"JSON error: {e}")
+			if self.logger is not None:
+				self.logger.error(f"JSON error: {e}")
 		except (KafkaException, RuntimeError) as e:
 			print(f"Kafka producer error: {e}")
-			self.logger.error(f"Kafka producer error: {e}")
+			if self.logger is not None:
+				self.logger.error(f"Kafka producer error: {e}")
 
 	@beartype
 	def serialize_to_json(self, event: dict) -> str:
