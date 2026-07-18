@@ -9,7 +9,8 @@ import time
 import asyncio
 from pathlib import Path
 from beartype import beartype
-from confluent_kafka import AIOProducer, Consumer, KafkaException
+from confluent_kafka import Consumer, KafkaException
+from confluent_kafka.aio import AIOProducer
 from confluent_kafka.admin import AdminClient, NewTopic
 from .rupert_config import RupertConfig
 from .rupert_logger import RupertLogger
