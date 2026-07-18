@@ -53,9 +53,9 @@ class RupertProsumer():
 		logging_cfg = dict(self.config['logging'])
 		log_directory = logging_cfg.get('log_directory')
 		if log_directory:
-			logging_cfg['log_file'] = str(Path(log_directory).expanduser() / f"{topic}.log")
+			logging_cfg['log_file'] = str(Path(log_directory).expanduser() / f"consumer.{topic}.log")
 		else:
-			logging_cfg['log_file'] = f"{topic}.log"
+			logging_cfg['log_file'] = f"consumer.{topic}.log"
 		self.logger = RupertLogger(logging_cfg)
 		try:
 			topic_name = self.config['kafka']['topics'].get(topic, topic)
@@ -143,9 +143,9 @@ class RupertProsumer():
 				logging_cfg = dict(self.config['logging'])
 				log_directory = logging_cfg.get('log_directory')
 				if log_directory:
-					logging_cfg['log_file'] = str(Path(log_directory).expanduser() / 'producer.log')
+					logging_cfg['log_file'] = str(Path(log_directory).expanduser() / f"producer.{topic}.log")
 				else:
-					logging_cfg['log_file'] = 'producer.log'
+					logging_cfg['log_file'] = f"producer.{topic}.log"
 				self.logger = RupertLogger(logging_cfg)
 			except (KeyError, TypeError, ValueError):
 				# Continue without logging if logger configuration is unavailable.
