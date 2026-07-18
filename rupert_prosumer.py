@@ -153,6 +153,8 @@ class RupertProsumer():
 		try:
 			producer = Producer(self.config['kafka']['connection'])
 			producer.produce(self.config['kafka']['topics'][topic], event_bytes)
+			producer.poll(10000)
+			producer.flush()
 			if self.logger is not None:
 				self.logger.success("Successfully sent an event.")
 			producer.poll(10000)
